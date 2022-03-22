@@ -8,8 +8,6 @@ import random
 import time
 import re
 
-import json
-
 class PostClient:
     def __init__(self):
         self.__queue = asyncio.Queue()
@@ -142,21 +140,3 @@ class ScoreTweetClient:
             except:
                 self.__debug_discord.error(f'Running error occoured. Reason: {format_exc()}')
             await asyncio.sleep(self.__wait_time)
-
-def main():
-    fb = FacebookPostClient(None)
-    dis = DiscordPostClient('https://discord.com/api/webhooks/906881323556274176/bk4TiWFpJCA8RJKTYTnoJpr8dqGab_yEIA2UgBfUXbQgWELnpCw5wl_z6QbHC3k6N2IZ')
-
-    with open('env.json','r') as f:
-        env = json.load(f)
-
-    stc = ScoreTweetClient(env, dis, fb)
-
-    loop = asyncio.get_event_loop()
-    loop.create_task(fb.run())
-    loop.create_task(dis.run())
-    loop.create_task(stc.run())
-    loop.run_forever()
-
-if __name__ == '__main__':
-    main()

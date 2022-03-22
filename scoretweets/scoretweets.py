@@ -22,6 +22,8 @@ def run_score_tweet(env_path, config_path, required_words):
     dpc = DiscordPostClient(env['discord_hook'], debug_discord)
     stc = ScoreTweetClient(env, dpc, fpc, required_words, debug_discord)
 
+    print('Running...')
+
     loop = asyncio.get_event_loop()
     loop.create_task(fpc.run())
     loop.create_task(dpc.run())

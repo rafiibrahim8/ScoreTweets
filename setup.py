@@ -1,6 +1,6 @@
 from setuptools import setup, find_packages
-from scoretweets import __version__
-
+from scoretweets import __version__, __config_dir
+import os
 
 def read_file(filename, lines=False):
     try:
@@ -43,3 +43,5 @@ setup(
         "Programming Language :: Python :: 3.9",
     ],
 )
+
+os.makedirs(os.path.expanduser(__config_dir), exist_ok=True)
