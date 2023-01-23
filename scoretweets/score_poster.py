@@ -25,12 +25,19 @@ class PostClient:
             self._post(score)
 
 class FacebookPostClient(PostClient):
+    EMOJI_SEQUENCES = ['8)']
     def __init__(self, config, group_id, debug_discord):
         super().__init__()
         self._session.cookies = cookiejar_from_dict(config['cookies'])
         self._session.headers = config['headers']
         self.__group_id = group_id
         self.__debug_discord = debug_discord
+    
+    @staticmethod
+    def __replace_auto_emoji(text):
+        for seq in FacebookPostClient.EMOJI_SEQUENCES:
+            text = text.replace(seq, seq[0] + ' ' + seq[1:])
+        return text
     
     def __post_impl(self, text):
         res = self._session.get(f'https://mbasic.facebook.com/groups/{self.__group_id}')
@@ -50,8 +57,8 @@ class FacebookPostClient(PostClient):
             'ctype': 'inline',
             'cver': 'amber',
             'rst_icv': '',
-            'xc_message': text,
-            'view_post':'Post'
+            'xc_message': self.__replace_auto_emoji(text),
+            'view_post': 'Post'
         }
 
         res=self._session.post(f'https://mbasic.facebook.com{action}', data=data)
