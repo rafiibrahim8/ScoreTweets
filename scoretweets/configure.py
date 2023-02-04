@@ -1,4 +1,5 @@
 from requests.utils import dict_from_cookiejar
+from copy import deepcopy
 import browser_cookie3 as bc3
 import requests
 import json
@@ -6,70 +7,79 @@ import re
 
 from .ua_getter import UAGetter
 
-def get_mbasic_link(link:str):
-    try:
-        slash = link.index('/', 8)
-    except ValueError:
-        try:
-            slash = link.index('/', 4) # fb.me/hello, m.me/hello
-        except:
-            return
-    return 'https://mbasic.facebook.com' + link[slash:]
-
 class Configure:
     def __init__(self, config_path):
         self.__config_path = config_path
     
-    def id_u(self, res_dot_text):
+    def check_entity(self, facebook_id):
+        res = requests.get(f'https://mbasic.facebook.com/{facebook_id}')
         try:
-            return re.findall('<a href=\\"\\/.{1,}\\/about\\?lst=[^%]+%3A([^%\\"]+)', res_dot_text)[0]
-        except:
+            return re.findall(r'<title>(.*?)\s\|\sFacebook<\/title>', res.text)[0]
+        except IndexError:
             return None
 
-    def check_cookie_whois(self, cookie):
+    def check_cookie_valid(self, cookie):
         res = requests.get('https://mbasic.facebook.com/me', cookies=cookie)
-        if self.id_u(res.text) != cookie.get('c_user'):
-            return None
-        return re.findall('<title>(.{1,})<\\/title>+', res.text)[0]
+        user_name = re.findall(r'<title.*?>(.*?)<\/title>', res.text)[0]
+        if 'log in or sign up' in user_name:
+            return False, None
+        if 'Facebook' == user_name:
+            return True, self.check_entity(cookie.get('c_user'))
+        return True, user_name
 
     def check_for_fb_profile(self):
-        browsers = {'Chrome': bc3.chrome, 'Firefox': bc3.firefox, 'Chromium': bc3.chromium, 'Edge': bc3.edge}
+        browsers = {'Chrome': bc3.chrome, 'Firefox': bc3.firefox, 'Chromium': bc3.chromium, 'Edge': bc3.edge, 'Opera': bc3.opera}
         cookies = []
         for name, browser in browsers.items():
             try:
                 cookie = dict_from_cookiejar(browser(domain_name='facebook.com'))
-                user_name = self.check_cookie_whois(cookie)
-                if user_name != None:
-                    cookies.append({'browser_name': name, 'user_name': user_name, 'cookie': cookie})
-            except:
+                if 'c_user' not in cookie:
+                    continue
+                valid, user_name = self.check_cookie_valid(cookie)
+                if not valid:
+                    continue
+                page_name = cookie.get('i_user') and self.check_entity(cookie.get('i_user'))
+                cookies.append({'browser_name': name, 'user_name': user_name, 'page_name': page_name, 'cookie': cookie})
+            except bc3.BrowserCookieError:
                 pass
+            except Exception as e:
+                print(f'Error while checking for {name}: {e}')
         return cookies
     
-    def manual_cookie_in_helper(self, name):
+    def manual_cookie_in_helper(self, name, required=True):
         while True:
             input_ = input(f'Enter cookie {name}: ').strip()
-            if input_:
+            if input_ or not required:
                 return input_
             print('Empty input. Enter again.')
 
     def manual_cookie_in(self):
-        cookie = {'wd': '1366x668'}
-        required = ['c_user', 'datr', 'sb', 'xs']
-        for i in required:
-            cookie[i] = self.manual_cookie_in_helper(i)
-        user_name =  self.check_cookie_whois(cookie)
-        if user_name == None:
+        cookies = {}
+        cookie_names = {
+            'c_user': True,
+            'datr': True,
+            'sb': True,
+            'xs': True,
+            'i_user': False,
+        }
+        for c, r in cookie_names.items():
+            cookie_in = self.manual_cookie_in_helper(c, r)
+            if not cookie_in:
+                continue
+            cookies[c] = cookie_in
+        cookies['m_page_voice'] = cookies.get('c_user')
+        cookies['wd'] = '1366x668'
+        valid, user_name = self.check_cookie_valid(cookies)
+        if not valid:
             print('Failed to find a valid user with this cookies.')
             return
-        print(f'Found user {user_name}')
-        return {'user_name': user_name, 'cookie': cookie}
+        page_name = cookies.get('i_user') and self.check_entity(cookies.get('i_user'))
+        print(f'Found user {user_name}\nFound page {page_name}')
+        return {'user_name': user_name, 'page_name': page_name, 'cookie': cookies}
 
     def get_user_cookie(self):
         print('Checking for facebook profiles on the PC.\nThis may take some time.\nPlease wait...') 
-        profiles = []
-        for i in self.check_for_fb_profile():
-            if i.get('user_name') != 'Facebook – log in or sign up':
-                profiles.append(i)
+        profiles = self.check_for_fb_profile()
         
         if not profiles:
             print('Unable to find any profile on this PC.\nEnter manually.')
@@ -77,23 +87,27 @@ class Configure:
             
         while True:
             for i, profile in enumerate(profiles, start=1):
-                print(f'{i}. {profile.get("user_name")} on {profile.get("browser_name")}')
+                page_str = (profile.get('page_name') or '') and f' with page {profile.get("page_name")}'
+                print(f'{i}. {profile.get("user_name")} on {profile.get("browser_name")}{page_str}')
             user_input = input('Choose a profile or enter nothing for manual cookie input: ').strip()
             if not user_input:
                 return self.manual_cookie_in()
             try: 
-                cookie = profiles[int(user_input)-1]
-            except: 
+                selected = profiles[int(user_input)-1]
+            except (ValueError, IndexError): 
                 print('Invalid input. Try Again.')
                 continue
-            print(f'Selected profile: {cookie.get("user_name")}')
-            return cookie
+            page_str = (selected.get('page_name') or '') and f' with page {selected.get("page_name")}'
+            print(f'Selected profile: {selected.get("user_name")}{page_str}')
+            return selected
     
     def configure_cookie(self):
         cookie = self.get_user_cookie()
         if cookie == None:
             print('Failed to get cookies.')
             return
+        if not cookie.get('page_name'):
+            print('Warning: You have not selected a page. You will be posting from your personal profile.')
         return cookie.get('cookie')
     
     def configure_ua(self):

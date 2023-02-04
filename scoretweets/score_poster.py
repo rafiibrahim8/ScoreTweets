@@ -8,6 +8,8 @@ import random
 import time
 import re
 
+from .graphql_utils import FacebookGraph, FACEBOOK_GRAPH_URL
+
 class PostClient:
     def __init__(self):
         self.__queue = asyncio.Queue()
@@ -24,7 +26,8 @@ class PostClient:
             score = await self.__queue.get()
             self._post(score)
 
-class FacebookPostClient(PostClient):
+
+class LegacyFacebookPostClient(PostClient):
     EMOJI_SEQUENCES = ['8)']
     def __init__(self, config, group_id, debug_discord):
         super().__init__()
@@ -34,11 +37,12 @@ class FacebookPostClient(PostClient):
         self.__debug_discord = debug_discord
     
     @staticmethod
-    def __replace_auto_emoji(text):
-        for seq in FacebookPostClient.EMOJI_SEQUENCES:
+    def replace_auto_emoji(text):
+        for seq in LegacyFacebookPostClient.EMOJI_SEQUENCES:
             text = text.replace(seq, seq[0] + ' ' + seq[1:])
         return text
-    
+
+
     def __post_impl(self, text):
         res = self._session.get(f'https://mbasic.facebook.com/groups/{self.__group_id}')
         soup = BeautifulSoup(res.text, 'html.parser')
@@ -57,7 +61,7 @@ class FacebookPostClient(PostClient):
             'ctype': 'inline',
             'cver': 'amber',
             'rst_icv': '',
-            'xc_message': self.__replace_auto_emoji(text),
+            'xc_message': self.replace_auto_emoji(text),
             'view_post': 'Post'
         }
 
@@ -71,6 +75,65 @@ class FacebookPostClient(PostClient):
             raise
         except:
             self.__debug_discord.error(f'Facebook posting failed. Reason:\n{format_exc()}')
+
+
+class FacebookPostClient(PostClient):
+    def __init__(self, config, group_id, debug_discord):
+        super().__init__()
+        self._session.cookies = cookiejar_from_dict(config['cookies'])
+        self._session.headers = config['headers']
+        self.__debug_discord = debug_discord
+        facebook_env = self.__get_facebook_env(group_id)
+        self._session.headers.update({'X-Fb-Lsd': facebook_env['lsd']})
+        if not config['cookies'].get('i_user'):
+            self.__graphql = FacebookGraph(group_id, config['cookies']['c_user'], facebook_env)
+        else:
+            self.__graphql = FacebookGraph(group_id, config['cookies']['i_user'], facebook_env)
+
+    def __get_facebook_env(self, group_id):
+        res = self._session.get(f'https://www.facebook.com/groups/{group_id}')
+
+        data_btmanifest = re.search(r'data-btmanifest="(\d+)_main"', res.text).group(1)
+        cavalry_get_lid = re.search(r'"cavalry_get_lid":"(\d+)"', res.text).group(1)
+        dtsg = re.search(r'"DTSGInitialData",\[\],{"token":"(.*?)"', res.text).group(1)
+        jazoest = re.search('jazoest=(\d+)', res.text).group(1)
+        lsd = re.search(r'"LSD",\[\],{"token":"(.*?)"', res.text).group(1)
+
+        return {
+            'data_btmanifest': data_btmanifest,
+            'cavalry_get_lid': cavalry_get_lid,
+            'dtsg': dtsg,
+            'jazoest': jazoest,
+            'lsd': lsd,
+        }
+    
+    def __post_impl(self, text):
+        text = LegacyFacebookPostClient.replace_auto_emoji(text)
+        headers, data = self.__graphql.get_post_query(text)
+        res = self._session.post(FACEBOOK_GRAPH_URL, data=data, headers=headers)
+        legacy_post_id = re.search('permalink\\\/(\d+)', res.text).group(1)
+        story_id = re.search(r'"story":{"id":"(.*?)"', res.text).group(1)
+        return {'legacy_post_id': legacy_post_id, 'story_id': story_id}
+    
+    def delete_post(self, story_id):
+        headers, data = self.__graphql.get_delete_query(story_id)
+        res = self._session.post(FACEBOOK_GRAPH_URL, data=data, headers=headers)
+        try:
+            json_res = res.json()
+            return json_res['data']['story_delete']['deleted_story_id'] == story_id
+        except requests.exceptions.JSONDecodeError:
+            return False
+        except KeyError:
+            return False
+
+    def _post(self, score):
+        try:
+            return self.__post_impl(score)
+        except KeyboardInterrupt:
+            raise
+        except:
+            self.__debug_discord.error(f'Facebook posting failed. Reason:\n{format_exc()}')
+
 
 class DiscordPostClient(PostClient):
     def __init__(self, hook_url, debug_discord):
@@ -103,7 +166,6 @@ class ScoreTweetClient:
         self.__url = f"https://api.twitter.com/2/users/{env['twitter_id']}/tweets"
         self.__required_words = required_words
         self.__debug_discord = debug_discord
-        self.__debug_discord_url = env.get('debug_discord')
         self.__last_posted = time.time()
         self.__discord_client = discord_client
         self.__facebook_client = facebook_client
@@ -137,7 +199,7 @@ class ScoreTweetClient:
             self.__discord_client.put_score(t['text'])
             self.__facebook_client.put_score(t['text'])
             self.__last_posted = t['timestamp']
-            
+
     async def run(self):
         while True:
             try:
