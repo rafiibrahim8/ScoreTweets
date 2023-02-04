@@ -14,17 +14,19 @@ class Configure:
     def check_entity(self, facebook_id):
         res = requests.get(f'https://mbasic.facebook.com/{facebook_id}')
         try:
-            return re.findall(r'<title>(.*?)\s\|\sFacebook<\/title>', res.text)[0]
+            return re.findall(r'<title.*?>(.*?)\s\|\sFacebook<\/title>', res.text)[0]
         except IndexError:
             return None
 
     def check_cookie_valid(self, cookie):
-        res = requests.get('https://mbasic.facebook.com/me', cookies=cookie)
+        cookie_ = deepcopy(cookie)
+        cookie_.pop('i_user', None)
+        res = requests.get('https://mbasic.facebook.com/me', cookies=cookie_)
         user_name = re.findall(r'<title.*?>(.*?)<\/title>', res.text)[0]
         if 'log in or sign up' in user_name:
             return False, None
         if 'Facebook' == user_name:
-            return True, self.check_entity(cookie.get('c_user'))
+            return True, self.check_entity(cookie_.get('c_user'))
         return True, user_name
 
     def check_for_fb_profile(self):
@@ -117,7 +119,23 @@ class Configure:
             return
         print(f'Got User-Agent: {ua}\n')
         return ua
-        
+    
+    def configure_keep_day(self):
+        while True:
+            print('If you choose to delete posts later, you can choose how many days to keep posts.\n')
+            keep_day = input('Enter number of days (default: 2): ').strip()
+            if not keep_day:
+                return 2
+            try:
+                keep_day = int(keep_day)
+            except ValueError:
+                print('Invalid input. Enter again.')
+                continue
+            if keep_day < 1:
+                print('Invalid input. Enter again.')
+                continue
+            return keep_day
+
     def configure(self):
         cookies = self.configure_cookie()
         if not cookies:
@@ -125,6 +143,7 @@ class Configure:
             return
         
         ua = self.configure_ua()
+        keep_day = self.configure_keep_day()
         if not ua:
             print('Configaretion failed.')
             return
@@ -140,6 +159,6 @@ class Configure:
         }
 
         with open(self.__config_path, 'w') as f:
-            json.dump({'headers': headers, 'cookies': cookies}, f, indent=4)
+            json.dump({'headers': headers, 'cookies': cookies, 'keep_day': keep_day}, f, indent=4)
 
         print('Configure successful')

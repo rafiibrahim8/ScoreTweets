@@ -5,10 +5,13 @@ from datetime import datetime
 import requests
 import asyncio
 import random
+import json
 import time
 import re
+import os
 
 from .graphql_utils import FacebookGraph, FACEBOOK_GRAPH_URL
+from . import CONFIG_DIR
 
 class PostClient:
     def __init__(self):
@@ -78,11 +81,12 @@ class LegacyFacebookPostClient(PostClient):
 
 
 class FacebookPostClient(PostClient):
-    def __init__(self, config, group_id, debug_discord):
+    def __init__(self, config, group_id, debug_discord, delete_later=False):
         super().__init__()
         self._session.cookies = cookiejar_from_dict(config['cookies'])
         self._session.headers = config['headers']
         self.__debug_discord = debug_discord
+        self.__delete_later = delete_later
         facebook_env = self.__get_facebook_env(group_id)
         self._session.headers.update({'X-Fb-Lsd': facebook_env['lsd']})
         if not config['cookies'].get('i_user'):
@@ -125,15 +129,30 @@ class FacebookPostClient(PostClient):
             return False
         except KeyError:
             return False
+    
+    def __save_post_id(self, res):
+        if not self.__delete_later:
+            return
+        save_dir = os.path.join(os.path.expanduser(CONFIG_DIR), 'post_ids')
+        os.makedirs(save_dir, exist_ok=True)
+        with open(os.path.join(save_dir, f'{int(time.time())}.json'), 'w') as f:
+            json.dump(res, f, indent=4)
 
     def _post(self, score):
         try:
-            return self.__post_impl(score)
+            res = self.__post_impl(score)
         except KeyboardInterrupt:
             raise
         except:
             self.__debug_discord.error(f'Facebook posting failed. Reason:\n{format_exc()}')
-
+            return
+        
+        try:
+            self.__save_post_id(res)
+        except KeyboardInterrupt:
+            raise
+        except:
+            self.__debug_discord.error(f'Facebook post id saving failed. Reason:\n{format_exc()}')
 
 class DiscordPostClient(PostClient):
     def __init__(self, hook_url, debug_discord):
